@@ -32,7 +32,7 @@ inputs:
     required: false
     default: "workspace-write"
   codex-version:
-    description: "Version of `@openai/codex` to install."
+    description: "Version of `@openai/codex` to install. When `use-bedrock` is `true`, the installed version must be >= 0.124.0."
     required: false
     default: ""
   codex-args:
@@ -101,6 +101,25 @@ inputs:
     description: "Comma-separated list of GitHub bot usernames that can bypass the write-access check. '*' is not supported; list trusted bots explicitly. Entries may include or omit the trailing [bot] suffix."
     required: false
     default: ""
+  use-bedrock:
+    description: |
+      When `true`, configure Codex to use Amazon Bedrock as the model provider
+      instead of the OpenAI Responses API proxy. AWS credentials must already
+      be configured on the runner before this action runs (for example, via
+      `aws-actions/configure-aws-credentials@v4` using OIDC). When enabled,
+      `openai-api-key` is not required and the Responses API proxy is not
+      started. Requires `@openai/codex` >= 0.124.0, which has a built-in
+      `amazon-bedrock` model provider.
+    required: false
+    default: "false"
+  bedrock-base-url:
+    description: |
+      Optional `base_url` override for the `amazon-bedrock` model provider.
+      Only set this when targeting a non-default AWS region or a custom
+      endpoint. When empty, the Codex CLI's built-in default is used.
+      Only used when `use-bedrock` is `true`.
+    required: false
+    default: ""
 outputs:
   final-message:
     description: "Raw output emitted by `codex exec`."
@@ -147,7 +166,36 @@ runs:
         CODEX_VERSION: ${{ inputs['codex-version'] }}
       run: npm install -g "@openai/codex@${CODEX_VERSION}"
 
+    # The built-in `amazon-bedrock` model provider was added in Codex CLI
+    # 0.124.0. Fail fast with a clear message instead of letting the user
+    # discover the missing provider at `codex exec` time.
+    - name: Verify Codex CLI supports Amazon Bedrock
+      if: ${{ inputs['use-bedrock'] == 'true' }}
+      shell: bash
+      env:
+        MIN_VERSION: "0.124.0"
+      run: |
+        set -euo pipefail
+        raw="$(codex --version 2>/dev/null || true)"
+        # `codex --version` typically prints e.g. "codex-cli 0.124.0"; pull
+        # out the first dotted version-looking token.
+        installed="$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+        if [ -z "$installed" ]; then
+          echo "Could not determine installed @openai/codex version (got: '$raw')." >&2
+          echo "use-bedrock=true requires @openai/codex >= ${MIN_VERSION}." >&2
+          exit 1
+        fi
+        # Sort the two versions; if the installed one sorts first, it's older.
+        oldest="$(printf '%s\n%s\n' "$installed" "$MIN_VERSION" | sort -V | head -n1)"
+        if [ "$oldest" != "$MIN_VERSION" ]; then
+          echo "use-bedrock=true requires @openai/codex >= ${MIN_VERSION}, but found ${installed}." >&2
+          echo "Pin codex-version to a newer release in your workflow inputs." >&2
+          exit 1
+        fi
+        echo "Detected @openai/codex ${installed} (>= ${MIN_VERSION})."
+
     - name: Install Codex Responses API proxy
+      if: ${{ inputs['use-bedrock'] != 'true' }}
       shell: bash
       env:
         CODEX_VERSION: ${{ inputs['codex-version'] }}
@@ -181,7 +229,7 @@ runs:
 
     - name: Check Responses API proxy status
       id: start_proxy
-      if: ${{ inputs['openai-api-key'] != '' }}
+      if: ${{ inputs['openai-api-key'] != '' && inputs['use-bedrock'] != 'true' }}
       shell: bash
       env:
         SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
@@ -198,7 +246,7 @@ runs:
     # key do not end up in the memory of the `codex-responses-api-proxy`
     # process where environment variables are stored.
     - name: Start Responses API proxy
-      if: ${{ inputs['openai-api-key'] != '' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
+      if: ${{ inputs['openai-api-key'] != '' && inputs['use-bedrock'] != 'true' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
       env:
         SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
         PROXY_API_KEY: ${{ inputs['openai-api-key'] }}
@@ -220,7 +268,7 @@ runs:
         ) &
 
     - name: Wait for Responses API proxy
-      if: ${{ inputs['openai-api-key'] != '' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
+      if: ${{ inputs['openai-api-key'] != '' && inputs['use-bedrock'] != 'true' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
       shell: bash
       env:
         SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
@@ -244,7 +292,7 @@ runs:
     # This step has an output named `port`.
     - name: Read server info
       id: read_server_info
-      if: ${{ inputs['openai-api-key'] != '' || inputs.prompt != '' || inputs['prompt-file'] != '' }}
+      if: ${{ inputs['use-bedrock'] != 'true' && (inputs['openai-api-key'] != '' || inputs.prompt != '' || inputs['prompt-file'] != '') }}
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -252,7 +300,7 @@ runs:
       run: node "$ACTION_PATH/dist/main.js" read-server-info "$SERVER_INFO_FILE"
 
     - name: Write Codex proxy config
-      if: ${{ inputs['openai-api-key'] != '' }}
+      if: ${{ inputs['openai-api-key'] != '' && inputs['use-bedrock'] != 'true' }}
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -264,6 +312,20 @@ runs:
           --codex-home "$CODEX_HOME" \
           --port "$PROXY_PORT" \
           --safety-strategy "$SAFETY_STRATEGY"
+
+    - name: Write Codex Bedrock config
+      if: ${{ inputs['use-bedrock'] == 'true' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        CODEX_HOME: ${{ steps.resolve_home.outputs.codex-home }}
+        SAFETY_STRATEGY: ${{ inputs['safety-strategy'] }}
+        BEDROCK_BASE_URL: ${{ inputs['bedrock-base-url'] }}
+      run: |
+        node "$ACTION_PATH/dist/main.js" write-bedrock-config \
+          --codex-home "$CODEX_HOME" \
+          --safety-strategy "$SAFETY_STRATEGY" \
+          --base-url "$BEDROCK_BASE_URL"
 
     - name: Enable Linux user namespaces for bubblewrap
       if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && (inputs['openai-api-key'] != '' || inputs.prompt != '' || inputs['prompt-file'] != '') }}
@@ -292,7 +354,7 @@ runs:
         fi
 
     - name: Drop sudo privilege, if appropriate
-      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && inputs['openai-api-key'] != '' }}
+      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && (inputs['openai-api-key'] != '' || inputs['use-bedrock'] == 'true') }}
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -311,7 +373,7 @@ runs:
         esac
 
     - name: Verify sudo privilege removed
-      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && inputs['openai-api-key'] != '' }}
+      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && (inputs['openai-api-key'] != '' || inputs['use-bedrock'] == 'true') }}
       shell: bash
       run: |
         if sudo -n true 2>/dev/null; then
