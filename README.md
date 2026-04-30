@@ -115,8 +115,8 @@ jobs:
 | `allow-users`            | List of GitHub usernames who can trigger the action in addition to those who have write access to the repo.                                    | `""`        |
 | `allow-bots`             | Allow runs triggered by trusted GitHub bot accounts (`github-actions[bot]`) to bypass the write-access check.                                  | `false`     |
 | `allow-bot-users`        | List of GitHub bot usernames that can bypass the write-access check. `*` is not supported; list trusted bots explicitly.                       | `""`        |
-| `use-bedrock`            | Opt-in: use Amazon Bedrock as the model provider instead of the OpenAI Responses API proxy. AWS credentials must already be configured on the runner (see [Amazon Bedrock](#amazon-bedrock)). | `false`     |
-| `bedrock-base-url`       | Optional `base_url` override for the `amazon-bedrock` model provider. Only used when `use-bedrock` is `true`.                                  | `""`        |
+| `use-bedrock`            | Opt-in to Amazon Bedrock as the model provider instead of the Responses API proxy. See [Amazon Bedrock](#amazon-bedrock).                      | `false`     |
+| `bedrock-base-url`       | Optional `base_url` override for the `amazon-bedrock` model provider. Only used when `use-bedrock` is `true`. Must be an `http(s)://` URL.     | `""`        |
 
 ## Safety Strategy
 

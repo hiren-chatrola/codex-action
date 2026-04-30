@@ -32,7 +32,7 @@ inputs:
     required: false
     default: "workspace-write"
   codex-version:
-    description: "Version of `@openai/codex` to install."
+    description: "Version of `@openai/codex` to install. When `use-bedrock` is `true`, the installed version must be >= 0.124.0."
     required: false
     default: ""
   codex-args:
@@ -165,6 +165,34 @@ runs:
       env:
         CODEX_VERSION: ${{ inputs['codex-version'] }}
       run: npm install -g "@openai/codex@${CODEX_VERSION}"
+
+    # The built-in `amazon-bedrock` model provider was added in Codex CLI
+    # 0.124.0. Fail fast with a clear message instead of letting the user
+    # discover the missing provider at `codex exec` time.
+    - name: Verify Codex CLI supports Amazon Bedrock
+      if: ${{ inputs['use-bedrock'] == 'true' }}
+      shell: bash
+      env:
+        MIN_VERSION: "0.124.0"
+      run: |
+        set -euo pipefail
+        raw="$(codex --version 2>/dev/null || true)"
+        # `codex --version` typically prints e.g. "codex-cli 0.124.0"; pull
+        # out the first dotted version-looking token.
+        installed="$(printf '%s\n' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+        if [ -z "$installed" ]; then
+          echo "Could not determine installed @openai/codex version (got: '$raw')." >&2
+          echo "use-bedrock=true requires @openai/codex >= ${MIN_VERSION}." >&2
+          exit 1
+        fi
+        # Sort the two versions; if the installed one sorts first, it's older.
+        oldest="$(printf '%s\n%s\n' "$installed" "$MIN_VERSION" | sort -V | head -n1)"
+        if [ "$oldest" != "$MIN_VERSION" ]; then
+          echo "use-bedrock=true requires @openai/codex >= ${MIN_VERSION}, but found ${installed}." >&2
+          echo "Pin codex-version to a newer release in your workflow inputs." >&2
+          exit 1
+        fi
+        echo "Detected @openai/codex ${installed} (>= ${MIN_VERSION})."
 
     - name: Install Codex Responses API proxy
       if: ${{ inputs['use-bedrock'] != 'true' }}

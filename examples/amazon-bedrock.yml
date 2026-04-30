@@ -21,6 +21,9 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # Replace with the IAM role in your AWS account that the workflow
+          # is allowed to assume. The role's trust policy must allow this
+          # repository (and ref) via the GitHub OIDC provider.
           role-to-assume: arn:aws:iam::123456789012:role/my-bedrock-role
           aws-region: us-east-1
 
@@ -36,7 +39,8 @@ jobs:
 
           # Optional: override the provider base_url for a non-default
           # region or custom endpoint. Leave unset to use Codex's default.
-          # bedrock-base-url: https://bedrock-runtime.us-west-2.amazonaws.com
+          # Must match the region configured above.
+          # bedrock-base-url: https://bedrock-runtime.us-east-1.amazonaws.com
 
           prompt: |
             Summarize the README of this repository in one paragraph.
